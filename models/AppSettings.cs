@@ -37,6 +37,7 @@ public class BackupPlan
     public int DailyRetentionDays { get; set; }
     public int WeeklyRetentionDays { get; set; }
     public int MonthlyRetentionDays { get; set; }
+    public string folderLocation { get; set; }
 }
 
 public enum BackupPlanType
@@ -49,7 +50,7 @@ public class VMBackupOperation
 {
     public string GUID { get; set; }
     public string fileType { get; set; }
-    public string folderLocation { get; set; }
+
 }
 
 public class SQLBackupOperation

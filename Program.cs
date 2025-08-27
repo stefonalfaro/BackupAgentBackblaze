@@ -48,7 +48,6 @@ foreach (var item in bucketsWithPlans)
         }
     }));
 
-
     // Console.WriteLine("Uploading test file...");
     // using (var stream = File.OpenRead(@"/home/stefonalfaro/Desktop/SelfConversionToJudaism.pdf"))
     // {
@@ -68,7 +67,6 @@ foreach (var item in bucketsWithPlans)
     //     var fileId = results2.Response.FileId;
     //     //var results3 = await Client.Parts.UploadAsync("", 1, null, stream, null);
     // }
-
 }
 await Task.WhenAll(tasks);
 
