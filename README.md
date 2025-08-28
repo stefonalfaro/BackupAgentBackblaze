@@ -90,3 +90,9 @@ We have .XVA files on the NAS in the xo-vm-backups folders.
 
 ## Automatic Quckbooks Backups to NAS
 There already is a Quickbooks backup process that runs locally. We now need to get this folder or specific files off the main working fileshare and over to the NAS.
+
+## Windows Start
+Wrap this in a batch or powershell ``dotnet BackupAgentBackblaze.dll``
+
+## Linux Start
+``dotnet BackupAgentBackblaze.dll``
