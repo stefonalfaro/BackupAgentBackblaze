@@ -29,17 +29,17 @@ foreach (var item in bucketsWithPlans)
             BucketItem bucket = item.bucket;
             BackupPlan plan = item.plan;
 
-            if (plan.type == BackupPlanType.VM && plan.vmOperation != null) //VM
+            if (plan.type == BackupPlanType.VM && plan.enabled) //VM
             {
                 await services.VMBackupAsync(bucket, plan, backblazeClient);
             }
-            else if (plan.type == BackupPlanType.SQL && plan.sqlOperation != null) //SQL
+            else if (plan.type == BackupPlanType.SQL && plan.enabled) //SQL
             {
                 await services.SQLBackupAsync(bucket, plan, backblazeClient);
             }
-            else //Skip to next plan
+            else if (plan.type == BackupPlanType.QuickBooks && plan.enabled) //QuickBooks
             {
-                logger.Error($" - Backup Plan {plan.name} has no valid operation defined.");
+                await services.QuickBooksBackupAsync(bucket, plan, backblazeClient);
             }
         }
         finally

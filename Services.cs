@@ -108,15 +108,16 @@ public class Services
     {
         //1 Convert bytes to MB
         double mb = bytes / (1024.0 * 1024.0);
+        Console.WriteLine($"File size is {mb} MB");
         if (mb > appSettings.chunkSizeInMB)
         {
             logger.Debug($"File size {mb} MB exceeds chunkSizeInMB setting of {appSettings.chunkSizeInMB} MB. Will do a large file upload.");
-            return false;
+            return true;
         }
 
         //2 If not exceeded return true
-        return true;
-    }   
+        return false;
+    }
 
     public async Task<List<FileItem>> GetFilesFromBackBlazeAsync(IStorageClient client, string BucketId)
     {
@@ -180,7 +181,7 @@ public class Services
 
     public async Task<bool> VMBackupAsync(BucketItem bucket, BackupPlan plan, IStorageClient backblazeClient)
     {
-        logger.Warn($"Plan {plan.name} - Type {plan.type} - BucketId {bucket.BucketId} - BucketName: {bucket.BucketName} - VM GUID: {plan.vmOperation.GUID} - FileType: {plan.vmOperation.fileType} - FolderLocation: {plan.folderLocation}");
+        Console.WriteLine($"Plan {plan.name} - Type {plan.type} - BucketId {bucket.BucketId} - BucketName: {bucket.BucketName} - FolderLocation: {plan.folderLocation}");
 
         //1 Connect to NAS via SMB
         (SMB2Client? smbClient, NTStatus status, ISMBFileStore fileStore, object directoryHandle) = await ConnectToNASAsync(plan.folderLocation);
@@ -226,28 +227,39 @@ public class Services
         }
 
         //4 Match on the FileName to see if it exists in BackBlaze already. Check if the upload date is different. If newer upload file.
+        Console.WriteLine("Comparing files between NAS and BackBlaze to determine what to upload...");
         foreach (var fileinNAS in filesinNAS)
         {
             if (fileinNAS is FileDirectoryInformation fileInfoNAS)  // Cast to FileDirectoryInformation to access properties
             {
-                foreach (FileItem fileinBucket in filesInBucket)
+                if (fileInfoNAS.FileName != "." && fileInfoNAS.FileName != "..") //Skip the . and .. entries
                 {
                     bool uploadNeeded = false;
 
-                    if (fileInfoNAS.FileName == fileinBucket.FileName)
+                    foreach (FileItem fileinBucket in filesInBucket)
                     {
-                        //4.1 Compare the LastWriteTime from NAS to the UploadTimestamp from BackBlaze to determine if the file needs to be uploaded.
-                        if (fileInfoNAS.LastWriteTime > fileinBucket.UploadTimestamp)
+                        if (fileInfoNAS.FileName == fileinBucket.FileName)
                         {
-                            Console.WriteLine($"\t NAS File: {fileInfoNAS.FileName} is newer than BackBlaze File: {fileinBucket.FileName}. Needs to be uploaded.");
+                            //4.1 Compare the LastWriteTime from NAS to the UploadTimestamp from BackBlaze to determine if the file needs to be uploaded.
+                            if (fileInfoNAS.LastWriteTime > fileinBucket.UploadTimestamp)
+                            {
+                                Console.WriteLine($"\t NAS File: {fileInfoNAS.FileName} is newer than BackBlaze File: {fileinBucket.FileName}. Needs to be uploaded.");
+                                uploadNeeded = true;
+                            }
+                            else
+                            {
+                                Console.WriteLine($"\t NAS File: {fileInfoNAS.FileName} is NOT newer than BackBlaze File: {fileinBucket.FileName}. No upload needed.");
+                            }
+                        }
+                        else //File doesnt exist yet so yes we can upload it.
+                        {
+                            Console.WriteLine($"\t NAS File: {fileInfoNAS.FileName} does not exist in BackBlaze. Needs to be uploaded.");
                             uploadNeeded = true;
                         }
-                        else
-                        {
-                            Console.WriteLine($"\t NAS File: {fileInfoNAS.FileName} is NOT newer than BackBlaze File: {fileinBucket.FileName}. No upload needed.");
-                        }
+
                     }
-                    else //File doesnt exist yet so yes we can upload it.
+
+                    if (filesInBucket.Count == 0)
                     {
                         Console.WriteLine($"\t NAS File: {fileInfoNAS.FileName} does not exist in BackBlaze. Needs to be uploaded.");
                         uploadNeeded = true;
@@ -255,7 +267,7 @@ public class Services
 
                     if (uploadNeeded)
                     {
-                       await StartUploadAsync(fileInfoNAS, plan, bucket, backblazeClient, directoryHandle);
+                        await StartUploadAsync(fileInfoNAS, plan, bucket, backblazeClient);
                     }
                 }
             }
@@ -266,7 +278,7 @@ public class Services
 
     public async Task<bool> SQLBackupAsync(BucketItem bucket, BackupPlan plan, IStorageClient backblazeClient)
     {
-        logger.Warn($"Plan {plan.name} - Type {plan.type} - BucketId {bucket.BucketId} - BucketName: {bucket.BucketName} - FolderLocation: {plan.folderLocation}");
+        Console.WriteLine($"Plan {plan.name} - Type {plan.type} - BucketId {bucket.BucketId} - BucketName: {bucket.BucketName} - FolderLocation: {plan.folderLocation}");
 
         //1 Connect to NAS via SMB
         (SMB2Client? smbClient, NTStatus status, ISMBFileStore fileStore, object directoryHandle) = await ConnectToNASAsync(plan.folderLocation);
@@ -312,28 +324,39 @@ public class Services
         }
 
         //4 Match on the FileName to see if it exists in BackBlaze already. Check if the upload date is different. If newer upload file.
+        Console.WriteLine("Comparing files between NAS and BackBlaze to determine what to upload...");
         foreach (var fileinNAS in filesinNAS)
         {
             if (fileinNAS is FileDirectoryInformation fileInfoNAS)  // Cast to FileDirectoryInformation to access properties
             {
-                foreach (FileItem fileinBucket in filesInBucket)
+                if (fileInfoNAS.FileName != "." && fileInfoNAS.FileName != "..") //Skip the . and .. entries
                 {
                     bool uploadNeeded = false;
 
-                    if (fileInfoNAS.FileName == fileinBucket.FileName)
+                    foreach (FileItem fileinBucket in filesInBucket)
                     {
-                        //4.1 Compare the LastWriteTime from NAS to the UploadTimestamp from BackBlaze to determine if the file needs to be uploaded.
-                        if (fileInfoNAS.LastWriteTime > fileinBucket.UploadTimestamp)
+                        if (fileInfoNAS.FileName == fileinBucket.FileName)
                         {
-                            Console.WriteLine($"\t NAS File: {fileInfoNAS.FileName} is newer than BackBlaze File: {fileinBucket.FileName}. Needs to be uploaded.");
+                            //4.1 Compare the LastWriteTime from NAS to the UploadTimestamp from BackBlaze to determine if the file needs to be uploaded.
+                            if (fileInfoNAS.LastWriteTime > fileinBucket.UploadTimestamp)
+                            {
+                                Console.WriteLine($"\t NAS File: {fileInfoNAS.FileName} is newer than BackBlaze File: {fileinBucket.FileName}. Needs to be uploaded.");
+                                uploadNeeded = true;
+                            }
+                            else
+                            {
+                                Console.WriteLine($"\t NAS File: {fileInfoNAS.FileName} is NOT newer than BackBlaze File: {fileinBucket.FileName}. No upload needed.");
+                            }
+                        }
+                        else //File doesnt exist yet so yes we can upload it.
+                        {
+                            Console.WriteLine($"\t NAS File: {fileInfoNAS.FileName} does not exist in BackBlaze. Needs to be uploaded.");
                             uploadNeeded = true;
                         }
-                        else
-                        {
-                            Console.WriteLine($"\t NAS File: {fileInfoNAS.FileName} is NOT newer than BackBlaze File: {fileinBucket.FileName}. No upload needed.");
-                        }
+
                     }
-                    else //File doesnt exist yet so yes we can upload it.
+
+                    if (filesInBucket.Count == 0)
                     {
                         Console.WriteLine($"\t NAS File: {fileInfoNAS.FileName} does not exist in BackBlaze. Needs to be uploaded.");
                         uploadNeeded = true;
@@ -341,7 +364,7 @@ public class Services
 
                     if (uploadNeeded)
                     {
-                        await StartUploadAsync(fileInfoNAS, plan, bucket, backblazeClient, directoryHandle);
+                        await StartUploadAsync(fileInfoNAS, plan, bucket, backblazeClient);
                     }
                 }
             }
@@ -350,7 +373,104 @@ public class Services
         return true;
     }
 
-    public async Task<bool> StartUploadAsync(FileDirectoryInformation fileInfoNAS, BackupPlan plan, BucketItem bucket, IStorageClient backblazeClient, object directoryHandle)
+    public async Task<bool> QuickBooksBackupAsync(BucketItem bucket, BackupPlan plan, IStorageClient backblazeClient)
+    {
+        Console.WriteLine($"Plan {plan.name} - Type {plan.type} - BucketId {bucket.BucketId} - BucketName: {bucket.BucketName} - FolderLocation: {plan.folderLocation}");
+
+        //1 Connect to NAS via SMB
+        (SMB2Client? smbClient, NTStatus status, ISMBFileStore fileStore, object directoryHandle) = await ConnectToNASAsync(plan.folderLocation);
+        if (status != NTStatus.STATUS_SUCCESS || smbClient == null)
+            throw new Exception("Failed to connect to NAS");
+
+        //2 Now query the NAS directory to list files
+        List<QueryDirectoryFileInformation> filesinNAS;
+        status = fileStore.QueryDirectory(out filesinNAS, directoryHandle, "*", FileInformationClass.FileDirectoryInformation);
+        Console.WriteLine($"Files found in NAS folder:: {filesinNAS?.Count ?? 0}");
+        if (status == NTStatus.STATUS_SUCCESS || status == NTStatus.STATUS_NO_MORE_FILES)
+        {
+            foreach (var file in filesinNAS)
+            {
+                if (file is FileDirectoryInformation fileInfo)  // Cast to FileDirectoryInformation to access properties
+                {
+                    if (fileInfo.FileName != "." && fileInfo.FileName != "..") // Skip . and .. entries
+                    {
+                        string fileType = fileInfo.FileAttributes.HasFlag(SMBLibrary.FileAttributes.Directory) ? "DIR" : "FILE";
+
+                        if (fileType == "FILE")
+                        {
+                            Console.WriteLine($"\t {fileInfo.FileName} - {fileType} - Size: {fileInfo.EndOfFile} - Uploaded: {fileInfo.LastWriteTime}");
+                        }
+                    }
+                }
+            }
+        }
+        else
+        {
+            logger.Error("Failed to query directory: " + status.ToString());
+        }
+        //2.1 Close the directory handle
+        fileStore.CloseFile(directoryHandle);
+        smbClient.Disconnect();
+
+        //3 Get the files in the remote BackBlaze bucket
+        List<FileItem> filesInBucket = await GetFilesFromBackBlazeAsync(backblazeClient, bucket.BucketId);
+        Console.WriteLine($"Files found in BackBlaze bucket: {filesInBucket?.Count ?? 0}");
+        foreach (FileItem file in filesInBucket)
+        {
+            Console.WriteLine($"\t {file.FileName} - Size: {file.ContentLength} - Uploaded: {file.UploadTimestamp}");
+        }
+
+        //4 Match on the FileName to see if it exists in BackBlaze already. Check if the upload date is different. If newer upload file.
+        Console.WriteLine("Comparing files between NAS and BackBlaze to determine what to upload...");
+        foreach (var fileinNAS in filesinNAS)
+        {
+            if (fileinNAS is FileDirectoryInformation fileInfoNAS)  // Cast to FileDirectoryInformation to access properties
+            {
+                if (fileInfoNAS.FileName != "." && fileInfoNAS.FileName != "..") //Skip the . and .. entries
+                {
+                    bool uploadNeeded = false;
+
+                    foreach (FileItem fileinBucket in filesInBucket)
+                    {
+                        if (fileInfoNAS.FileName == fileinBucket.FileName)
+                        {
+                            //4.1 Compare the LastWriteTime from NAS to the UploadTimestamp from BackBlaze to determine if the file needs to be uploaded.
+                            if (fileInfoNAS.LastWriteTime > fileinBucket.UploadTimestamp)
+                            {
+                                Console.WriteLine($"\t NAS File: {fileInfoNAS.FileName} is newer than BackBlaze File: {fileinBucket.FileName}. Needs to be uploaded.");
+                                uploadNeeded = true;
+                            }
+                            else
+                            {
+                                Console.WriteLine($"\t NAS File: {fileInfoNAS.FileName} is NOT newer than BackBlaze File: {fileinBucket.FileName}. No upload needed.");
+                            }
+                        }
+                        else //File doesnt exist yet so yes we can upload it.
+                        {
+                            Console.WriteLine($"\t NAS File: {fileInfoNAS.FileName} does not exist in BackBlaze. Needs to be uploaded.");
+                            uploadNeeded = true;
+                        }
+
+                    }
+
+                    if (filesInBucket.Count == 0)
+                    {
+                        Console.WriteLine($"\t NAS File: {fileInfoNAS.FileName} does not exist in BackBlaze. Needs to be uploaded.");
+                        uploadNeeded = true;
+                    }
+
+                    if (uploadNeeded)
+                    {
+                        await StartUploadAsync(fileInfoNAS, plan, bucket, backblazeClient);
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
+
+    public async Task<bool> StartUploadAsync(FileDirectoryInformation fileInfoNAS, BackupPlan plan, BucketItem bucket, IStorageClient backblazeClient)
     {
         //1 Reconnect to NAS to get the file stream. A new instance of SMB2Client is needed? How are we going to handle doing this in parallel? 
         (SMB2Client? smbClient2, NTStatus status2, ISMBFileStore fileStore2, object directoryHandle2) = await ConnectToNASAsync(plan.folderLocation);
@@ -364,6 +484,7 @@ public class Services
 
         //3 Determine if we need to do a simple upload or a multiPart upload based on chunkSizeInMB setting
         bool multiPart = await validateChunkSizeInMB(fileInfoNAS.EndOfFile);
+        string filePath = plan.folderLocation + "\\" + fileInfoNAS.FileName;
         if (multiPart == false)
         {
             Console.WriteLine($"\t File size is less than chunkSizeInMB. Will do a simple upload.");
@@ -371,30 +492,17 @@ public class Services
             //4.0 Open the fileHandle for reading. This is different from opening a directory. The handle is different.
             object fileHandle;
             FileStatus fileStatus;
-            var openStatus = fileStore2.CreateFile(out fileHandle, out fileStatus, fileInfoNAS.FileName, AccessMask.GENERIC_READ, SMBLibrary.FileAttributes.Normal,
+            var openStatus = fileStore2.CreateFile(out fileHandle, out fileStatus, filePath, AccessMask.GENERIC_READ, SMBLibrary.FileAttributes.Normal,
                 ShareAccess.Read, CreateDisposition.FILE_OPEN, CreateOptions.FILE_NON_DIRECTORY_FILE, null);
             if (openStatus != NTStatus.STATUS_SUCCESS)
                 throw new Exception($"Failed to open file '{fileInfoNAS.FileName}' for reading: {openStatus}");
 
-            //4.1  Read the entire file into memory
-            NTStatus readStatus = fileStore2.ReadFile(out byte[] fullData, fileHandle, 0, (int)fileInfoNAS.EndOfFile);
-            if (readStatus != NTStatus.STATUS_SUCCESS)
-                throw new Exception($"Read failed: {readStatus}");
-
-            //4.2 Put the full data into a MemoryStream for upload
-            using var fullStream = new MemoryStream(fullData);
+            // 4.1 and 4.2 Read file in small 1mb SMB chunks but buffer to memory
+            using var fullStream = await ReadFileInChunks(fileStore2, fileHandle, fileInfoNAS);
 
             //4.3 Upload to Backblaze
-            if (!appSettings.testMode)
-            {
-                var results = await backblazeClient.UploadAsync(bucket.BucketId, fileInfoNAS.FileName, fullStream);
-                Console.WriteLine($"Simple file upload finished: {results.Response?.FileName}");
-            }
-            else
-            {
-                Console.WriteLine($"TEST MODE - Skipping actual upload of file: {fileInfoNAS.FileName}");
-            }
-
+            var results = await backblazeClient.UploadAsync(bucket.BucketId, fileInfoNAS.FileName, fullStream);
+            Console.WriteLine($"Simple file upload finished: {results.Response?.FileName}");
         }
         else //MultiPart upload
         {
@@ -403,7 +511,7 @@ public class Services
             //4.0 Open the fileHandle for reading. This is different from opening a directory. The handle is different.
             object fileHandle;
             FileStatus fileStatus;
-            var openStatus = fileStore2.CreateFile(out fileHandle, out fileStatus, fileInfoNAS.FileName,
+            var openStatus = fileStore2.CreateFile(out fileHandle, out fileStatus, filePath,
                 AccessMask.GENERIC_READ, SMBLibrary.FileAttributes.Normal, ShareAccess.Read, CreateDisposition.FILE_OPEN, CreateOptions.FILE_NON_DIRECTORY_FILE, null);
             if (openStatus != NTStatus.STATUS_SUCCESS)
                 throw new Exception($"Failed to open file '{fileInfoNAS.FileName}' for reading: {openStatus}");
@@ -418,54 +526,110 @@ public class Services
             int partNumber = 1;
             var sha1List = new List<string>();
 
+            using var backblazeChunkBuffer = new MemoryStream();
+
             //4.2 Carve out 100mb chunks from the file on the NAS and upload each chunk to BackBlaze
             while (offset < fileInfoNAS.EndOfFile)
             {
                 //4.2.1 Read from NAS via SMB at specific offset
-                int bytesToRead = (int)Math.Min(partSize, fileInfoNAS.EndOfFile - offset);
+                int bytesToRead = (int)Math.Min(appSettings.smbChunkSize, fileInfoNAS.EndOfFile - offset);
                 NTStatus readStatus = fileStore2.ReadFile(out byte[] chunkData, fileHandle, offset, bytesToRead);
                 if (readStatus != NTStatus.STATUS_SUCCESS)
                     throw new Exception($"Read failed at offset {offset}: {readStatus}");
 
-                //4.2.2 Put the chunk data into a MemoryStream for upload
-                using var chunkStream = new MemoryStream(chunkData);
-
-                //4.2.3 Get upload URL for the part. This is because we need an authTokken to upload each part.
-                var uploadUrlResult = await backblazeClient.Parts.GetUploadUrlAsync(fileId);
-                Uri uploadUrl = uploadUrlResult.Response.UploadUrl;
-                string authToken = uploadUrlResult.Response.AuthorizationToken;
-
-                //4.2.4 Upload to Backblaze
-                if (!appSettings.testMode)
+                //4.2.2 Write 1mb SMB chunk to Backblaze buffer
+                if (chunkData?.Length > 0)
                 {
-                    var uploadPartResult = await backblazeClient.Parts.UploadAsync(uploadUrl, partNumber, authToken, chunkStream, null);
-                    Console.WriteLine($"Uploaded part {partNumber} of file: {fileInfoNAS.FileName}");
-                    sha1List.Add(uploadPartResult.Response.ContentSha1);
-                }
-                else
-                {
-                    Console.WriteLine($"TEST MODE - Skipping actual upload of part {partNumber} of file: {fileInfoNAS.FileName}");
-                    sha1List.Add("TESTMODEFAKESHA1PART" + partNumber.ToString("D4"));  // In test mode, we can simulate a SHA1 for tracking purposes
+                    // Add SMB chunk to Backblaze buffer
+                    await backblazeChunkBuffer.WriteAsync(chunkData, 0, chunkData.Length);
+                    offset += chunkData.Length;
+
+                    // Progress reporting for SMB reads (every 10MB or at completion)
+                    if (offset % (10 * 1024 * 1024) == 0 || offset == fileInfoNAS.EndOfFile)
+                    {
+                        double progress = (double)offset / fileInfoNAS.EndOfFile * 100;
+                        Console.WriteLine($"\tSMB reading progress: {progress:F1}% ({offset:N0}/{fileInfoNAS.EndOfFile:N0} bytes)");
+                    }
                 }
 
-                offset += bytesToRead;
-                partNumber++;
+                // When buffer reaches 100MB OR we've read the entire file, upload to Backblaze
+                bool bufferFull = backblazeChunkBuffer.Length >= partSize;
+                bool fileComplete = offset >= fileInfoNAS.EndOfFile;
+                if (bufferFull || fileComplete)
+                {
+                    if (backblazeChunkBuffer.Length > 0)
+                    {
+                        //4.2.3 Get upload URL for the part. This is because we need an authTokken to upload each part.
+                        var uploadUrlResult = await backblazeClient.Parts.GetUploadUrlAsync(fileId);
+                        Uri uploadUrl = uploadUrlResult.Response.UploadUrl;
+                        string authToken = uploadUrlResult.Response.AuthorizationToken;
+
+                        //4.2.4 Upload to Backblaze
+                        backblazeChunkBuffer.Position = 0;
+                        var uploadPartResult = await backblazeClient.Parts.UploadAsync(uploadUrl, partNumber, authToken, backblazeChunkBuffer, null);
+                        Console.WriteLine($"Uploaded part {partNumber} of file: {fileInfoNAS.FileName}");
+                        sha1List.Add(uploadPartResult.Response.ContentSha1);
+
+                        backblazeChunkBuffer.SetLength(0);
+                        backblazeChunkBuffer.Position = 0;
+                        partNumber++;
+
+                        if (fileComplete)
+                            break; // Exit the loop if we've completed the file
+                    }
+                }
             }
 
             //4.3 Finish the large file upload
             var resultsFinishLargeFile = await backblazeClient.Parts.FinishLargeFileAsync(fileId, sha1List);
             Console.WriteLine($"Large file upload finished: {resultsFinishLargeFile.Response.FileName}");
-            if (appSettings.testMode)
-            {
-                Console.WriteLine($"TEST MODE - Error intentional due to invalid sha1List. This is expected in test mode.");
-            }
         }
 
-        //5 Close the directory handle and SMB connection
-        fileStore2.CloseFile(directoryHandle);
+        //5 Close the SMB connection
         smbClient2.Disconnect();
 
         return true;
+    }
+    
+    //This is because SMB can only read so much data at a time. We read in 1mb chunks and write to a memory buffer until the whole file is read.
+    private async Task<MemoryStream> ReadFileInChunks(ISMBFileStore fileStore, object fileHandle, FileDirectoryInformation fileInfo)
+    {
+        long totalBytesRead = 0;
+        long fileSize = fileInfo.EndOfFile;
+        var memoryStream = new MemoryStream((int)fileSize); // Pre-allocate memory
+
+        Console.WriteLine($"\tReading {fileInfo.FileName} ({fileSize:N0} bytes) in {appSettings.smbChunkSize:N0} byte SMB chunks...");
+
+        while (totalBytesRead < fileSize)
+        {
+            int bytesToRead = (int)Math.Min(appSettings.smbChunkSize, fileSize - totalBytesRead);
+
+            NTStatus readStatus = fileStore.ReadFile(out byte[] chunkData, fileHandle, totalBytesRead, bytesToRead);
+
+            if (readStatus != NTStatus.STATUS_SUCCESS)
+            {
+                memoryStream.Dispose();
+                throw new Exception($"Failed to read SMB chunk at offset {totalBytesRead}: {readStatus}");
+            }
+
+            if (chunkData == null || chunkData.Length == 0)
+                break;
+
+            // Write SMB chunk to memory buffer
+            await memoryStream.WriteAsync(chunkData, 0, chunkData.Length);
+            totalBytesRead += chunkData.Length;
+
+            // Progress reporting
+            if (totalBytesRead % (10 * 1024 * 1024) == 0 || totalBytesRead == fileSize)
+            {
+                double progress = (double)totalBytesRead / fileSize * 100;
+                Console.WriteLine($"\tSMB reading progress: {progress:F1}% ({totalBytesRead:N0}/{fileSize:N0} bytes)");
+            }
+        }
+
+        memoryStream.Position = 0; // Reset for reading
+        Console.WriteLine($"\tSuccessfully buffered {totalBytesRead:N0} bytes in memory for Backblaze upload");
+        return memoryStream;
     }
 
 }

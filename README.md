@@ -79,3 +79,14 @@ SMB2Client should be created per operation (not singleton) → you’re doing th
 IStorageClient (your Backblaze client) can be reused safely (singleton) → also correct.
 
 As each VMBackupAsync call handles its own state (no shared file handles, no global data), then you can safely run multiple operations in parallel.
+
+## Automatic SQL Backups to NAS
+We have .BAK and .TRN files on the NAS in the sql-backups folder.
+SQL Server Agent lets us mount the NAS ``net use Z: \\192.168.2.10\backups\sql-backups /user:192.168.2.10\Backups PASSWORDHERE`` which means our regular backup script now points to Z:\ instead.
+Then at the end we should clear it ``net use \\192.168.2.10 /delete /y``
+
+## XenOrchestra Virtual Machines to NAS
+We have .XVA files on the NAS in the xo-vm-backups folders.
+
+## Automatic Quckbooks Backups to NAS
+There already is a Quickbooks backup process that runs locally. We now need to get this folder or specific files off the main working fileshare and over to the NAS.
