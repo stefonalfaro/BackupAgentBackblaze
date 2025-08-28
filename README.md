@@ -2,6 +2,8 @@
 
 This application provides a robust solution for backing up large files from SMB network shares directly to Backblaze B2 cloud storage, without requiring local disk space for the full file. It leverages a combination of network carving techniques and Backblaze's multipart upload APIs to efficiently handle very large files.
 
+<img width="759" height="516" alt="image" src="https://github.com/user-attachments/assets/7e156bc3-dcbb-4de8-b46e-1e6035a7e92c" />
+
 ---
 
 ## Key Concepts
