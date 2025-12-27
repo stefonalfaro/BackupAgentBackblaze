@@ -119,14 +119,39 @@ public class Services
         return false;
     }
 
-    public async Task<List<FileItem>> GetFilesFromBackBlazeAsync(IStorageClient client, string BucketId)
+    public async Task<List<FileItem>> GetFilesFromBackBlazeAsync(IStorageClient client,string bucketId)
     {
-        IApiResults<ListFileNamesResponse> response = await client.Files.ListNamesAsync(BucketId);
-        ListFileNamesResponse responseObject = response.Response;
-        List<FileItem> files = responseObject.Files;
+        var allFiles = new List<FileItem>(capacity: 12000);
+        string? startFileName = null;
 
-        return files;
+        while (true)
+        {
+            var request = new ListFileNamesRequest(bucketId)
+            {
+                StartFileName = startFileName,     
+                MaxFileCount = 1000, // B2 recommends 1000/page; >1000 may be billed as multiple txns.
+                // Prefix = "", // optionally set if you upload under a folder prefix
+            };
+
+            var response = await client.Files.ListNamesAsync(request);
+            var page = response.Response;
+
+            if (page?.Files is { Count: > 0 })
+            {
+                allFiles.AddRange(page.Files);
+            }
+
+            if (string.IsNullOrEmpty(page?.NextFileName))
+            {
+                break;
+            }
+
+            startFileName = page.NextFileName;
+        }
+
+        return allFiles;
     }
+
 
     //This returns a directoryHandle meaning we still need to open a fileHandle on anything we want to read.
     public async Task<(SMB2Client?, SMBLibrary.NTStatus, ISMBFileStore fileStore, object directoryHandle)> ConnectToNASAsync(string path)
@@ -227,50 +252,26 @@ public class Services
         }
 
         //4 Match on the FileName to see if it exists in BackBlaze already. Check if the upload date is different. If newer upload file.
-        logger.Info("Comparing files between NAS and BackBlaze to determine what to upload...");
+        var bucketNames = filesInBucket.Select(f => f.FileName).ToHashSet(StringComparer.Ordinal);
+        logger.Info("Checking NAS files against BackBlaze by filename...");
         foreach (var fileinNAS in filesinNAS)
         {
-            if (fileinNAS is FileDirectoryInformation fileInfoNAS)  // Cast to FileDirectoryInformation to access properties
+            if (fileinNAS is not FileDirectoryInformation nasFile) continue;
+            if (nasFile.FileName is "." or "..") continue;
+            if (nasFile.FileAttributes.HasFlag(SMBLibrary.FileAttributes.Directory))
+                continue;
+
+            if (bucketNames.Contains(nasFile.FileName))
             {
-                if (fileInfoNAS.FileName != "." && fileInfoNAS.FileName != "..") //Skip the . and .. entries
-                {
-                    bool uploadNeeded = false;
-
-                    foreach (FileItem fileinBucket in filesInBucket)
-                    {
-                        if (fileInfoNAS.FileName == fileinBucket.FileName)
-                        {
-                            //4.1 Compare the LastWriteTime from NAS to the UploadTimestamp from BackBlaze to determine if the file needs to be uploaded.
-                            if (fileInfoNAS.LastWriteTime > fileinBucket.UploadTimestamp)
-                            {
-                                logger.Debug($"\t NAS File: {fileInfoNAS.FileName} is newer than BackBlaze File: {fileinBucket.FileName}. Needs to be uploaded.");
-                                uploadNeeded = true;
-                            }
-                            else
-                            {
-                                logger.Debug($"\t NAS File: {fileInfoNAS.FileName} is NOT newer than BackBlaze File: {fileinBucket.FileName}. No upload needed.");
-                            }
-                        }
-                        else //File doesnt exist yet so yes we can upload it.
-                        {
-                            logger.Debug($"\t NAS File: {fileInfoNAS.FileName} does not exist in BackBlaze. Needs to be uploaded.");
-                            uploadNeeded = true;
-                        }
-
-                    }
-
-                    if (filesInBucket.Count == 0)
-                    {
-                        logger.Debug($"\t NAS File: {fileInfoNAS.FileName} does not exist in BackBlaze. Needs to be uploaded.");
-                        uploadNeeded = true;
-                    }
-
-                    if (uploadNeeded)
-                    {
-                        await StartUploadAsync(fileInfoNAS, plan, bucket, backblazeClient);
-                    }
-                }
+                logger.Debug($"\t Skip (already exists): {nasFile.FileName}");
+                continue;
             }
+
+            logger.Debug($"\t Upload (missing in BackBlaze): {nasFile.FileName}");
+            await StartUploadAsync(nasFile, plan, bucket, backblazeClient);
+
+            // Optional: prevent double-upload within the same run if the NAS list contains duplicates for any reason.
+            bucketNames.Add(nasFile.FileName);
         }
 
         return true;
@@ -324,50 +325,26 @@ public class Services
         }
 
         //4 Match on the FileName to see if it exists in BackBlaze already. Check if the upload date is different. If newer upload file.
-        logger.Info("Comparing files between NAS and BackBlaze to determine what to upload...");
+        var bucketNames = filesInBucket.Select(f => f.FileName).ToHashSet(StringComparer.Ordinal);
+        logger.Warn("Checking NAS files against BackBlaze by filename...");
         foreach (var fileinNAS in filesinNAS)
         {
-            if (fileinNAS is FileDirectoryInformation fileInfoNAS)  // Cast to FileDirectoryInformation to access properties
+            if (fileinNAS is not FileDirectoryInformation nasFile) continue;
+            if (nasFile.FileName is "." or "..") continue;
+            if (nasFile.FileAttributes.HasFlag(SMBLibrary.FileAttributes.Directory))
+                continue;
+
+            if (bucketNames.Contains(nasFile.FileName))
             {
-                if (fileInfoNAS.FileName != "." && fileInfoNAS.FileName != "..") //Skip the . and .. entries
-                {
-                    bool uploadNeeded = false;
-
-                    foreach (FileItem fileinBucket in filesInBucket)
-                    {
-                        if (fileInfoNAS.FileName == fileinBucket.FileName)
-                        {
-                            //4.1 Compare the LastWriteTime from NAS to the UploadTimestamp from BackBlaze to determine if the file needs to be uploaded.
-                            if (fileInfoNAS.LastWriteTime > fileinBucket.UploadTimestamp)
-                            {
-                                logger.Debug($"\t NAS File: {fileInfoNAS.FileName} is newer than BackBlaze File: {fileinBucket.FileName}. Needs to be uploaded.");
-                                uploadNeeded = true;
-                            }
-                            else
-                            {
-                                logger.Debug($"\t NAS File: {fileInfoNAS.FileName} is NOT newer than BackBlaze File: {fileinBucket.FileName}. No upload needed.");
-                            }
-                        }
-                        else //File doesnt exist yet so yes we can upload it.
-                        {
-                            logger.Debug($"\t NAS File: {fileInfoNAS.FileName} does not exist in BackBlaze. Needs to be uploaded.");
-                            uploadNeeded = true;
-                        }
-
-                    }
-
-                    if (filesInBucket.Count == 0)
-                    {
-                        logger.Debug($"\t NAS File: {fileInfoNAS.FileName} does not exist in BackBlaze. Needs to be uploaded.");
-                        uploadNeeded = true;
-                    }
-
-                    if (uploadNeeded)
-                    {
-                        await StartUploadAsync(fileInfoNAS, plan, bucket, backblazeClient);
-                    }
-                }
+                logger.Info($"\t Skip (already exists): {nasFile.FileName}");
+                continue;
             }
+
+            logger.Info($"\t Upload (missing in BackBlaze): {nasFile.FileName}");
+            await StartUploadAsync(nasFile, plan, bucket, backblazeClient);
+
+            // Optional: prevent double-upload within the same run if the NAS list contains duplicates for any reason.
+            bucketNames.Add(nasFile.FileName);
         }
 
         return true;
@@ -421,50 +398,26 @@ public class Services
         }
 
         //4 Match on the FileName to see if it exists in BackBlaze already. Check if the upload date is different. If newer upload file.
-        logger.Info("Comparing files between NAS and BackBlaze to determine what to upload...");
+        var bucketNames = filesInBucket.Select(f => f.FileName).ToHashSet(StringComparer.Ordinal);
+        logger.Info("Checking NAS files against BackBlaze by filename...");
         foreach (var fileinNAS in filesinNAS)
         {
-            if (fileinNAS is FileDirectoryInformation fileInfoNAS)  // Cast to FileDirectoryInformation to access properties
+            if (fileinNAS is not FileDirectoryInformation nasFile) continue;
+            if (nasFile.FileName is "." or "..") continue;
+            if (nasFile.FileAttributes.HasFlag(SMBLibrary.FileAttributes.Directory))
+                continue;
+
+            if (bucketNames.Contains(nasFile.FileName))
             {
-                if (fileInfoNAS.FileName != "." && fileInfoNAS.FileName != "..") //Skip the . and .. entries
-                {
-                    bool uploadNeeded = false;
-
-                    foreach (FileItem fileinBucket in filesInBucket)
-                    {
-                        if (fileInfoNAS.FileName == fileinBucket.FileName)
-                        {
-                            //4.1 Compare the LastWriteTime from NAS to the UploadTimestamp from BackBlaze to determine if the file needs to be uploaded.
-                            if (fileInfoNAS.LastWriteTime > fileinBucket.UploadTimestamp)
-                            {
-                                logger.Debug($"\t NAS File: {fileInfoNAS.FileName} is newer than BackBlaze File: {fileinBucket.FileName}. Needs to be uploaded.");
-                                uploadNeeded = true;
-                            }
-                            else
-                            {
-                                logger.Debug($"\t NAS File: {fileInfoNAS.FileName} is NOT newer than BackBlaze File: {fileinBucket.FileName}. No upload needed.");
-                            }
-                        }
-                        else //File doesnt exist yet so yes we can upload it.
-                        {
-                            logger.Debug($"\t NAS File: {fileInfoNAS.FileName} does not exist in BackBlaze. Needs to be uploaded.");
-                            uploadNeeded = true;
-                        }
-
-                    }
-
-                    if (filesInBucket.Count == 0)
-                    {
-                        logger.Debug($"\t NAS File: {fileInfoNAS.FileName} does not exist in BackBlaze. Needs to be uploaded.");
-                        uploadNeeded = true;
-                    }
-
-                    if (uploadNeeded)
-                    {
-                        await StartUploadAsync(fileInfoNAS, plan, bucket, backblazeClient);
-                    }
-                }
+                logger.Debug($"\t Skip (already exists): {nasFile.FileName}");
+                continue;
             }
+
+            logger.Debug($"\t Upload (missing in BackBlaze): {nasFile.FileName}");
+            await StartUploadAsync(nasFile, plan, bucket, backblazeClient);
+
+            // Optional: prevent double-upload within the same run if the NAS list contains duplicates for any reason.
+            bucketNames.Add(nasFile.FileName);
         }
 
         return true;
