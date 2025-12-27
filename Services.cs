@@ -157,7 +157,7 @@ public class Services
     public async Task<(SMB2Client?, SMBLibrary.NTStatus, ISMBFileStore fileStore, object directoryHandle)> ConnectToNASAsync(string path)
     {
         //1 Connect to NAS via SMB
-        logger.Info("Connecting to NAS: " + appSettings.localNASConfig.description);
+        logger.Debug("Connecting to NAS: " + appSettings.localNASConfig.description);
         var client = new SMB2Client();
         bool isConnected = client.Connect(IPAddress.Parse(appSettings.localNASConfig.ip), SMBTransportType.DirectTCPTransport);
         if (isConnected)
@@ -174,7 +174,7 @@ public class Services
                     status = fileStore.CreateFile(out directoryHandle, out fileStatus, path, AccessMask.GENERIC_READ, SMBLibrary.FileAttributes.Directory, ShareAccess.Read, CreateDisposition.FILE_OPEN, CreateOptions.FILE_DIRECTORY_FILE, null);
                     if (status == NTStatus.STATUS_SUCCESS)
                     {
-                        logger.Info("Successfully connected to NAS directory: " + path);
+                        logger.Debug("Successfully connected to NAS directory: " + path);
 
                         //3 Return the SMB2Client
                         return (client, status, fileStore, directoryHandle);
@@ -520,7 +520,7 @@ public class Services
                         //4.2.4 Upload to Backblaze
                         backblazeChunkBuffer.Position = 0;
                         var uploadPartResult = await backblazeClient.Parts.UploadAsync(uploadUrl, partNumber, authToken, backblazeChunkBuffer, null);
-                        logger.Debug($"Uploaded part {partNumber} of file: {fileInfoNAS.FileName}");
+                        logger.Info($"Uploaded part {partNumber} of file: {fileInfoNAS.FileName}");
                         sha1List.Add(uploadPartResult.Response.ContentSha1);
 
                         backblazeChunkBuffer.SetLength(0);
