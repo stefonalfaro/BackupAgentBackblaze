@@ -2,7 +2,8 @@ public class AppSettings
 {
     public bool testMode { get; set; } = false;
     public int smbChunkSize { get; set; } = 1024*1024; //1 MB default SMB read chunk size
-    public int threadCount { get; set; } = 4; //Default to 4 threads for parallel uploads
+    public int threadCount { get; set; } = 1; //Default to 4 threads for parallel uploads
+    public int fileLoopThreadCount {get; set; } = 8;
     public int chunkSizeInMB { get; set; } = 100; //100 MB default. The whole point is so we can carve out chunks of a remote network SMB file to partially upload in parts to BackBlaze.
     public int maxFileSizeToUploadInGB { get; set; } = 1000; //1000 GB default (gappserver3 is 800gb)
     public BackblazeConfig backblazeConfig { get; set; }

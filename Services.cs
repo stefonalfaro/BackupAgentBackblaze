@@ -9,6 +9,8 @@ public class Services
 {
     NLog.Logger logger;
     AppSettings appSettings;
+    ParallelOptions parallelOptions;
+
     public Services(NLog.Logger logger)
     {
         this.logger = logger;
@@ -26,7 +28,7 @@ public class Services
         var appSettings = new AppSettings();
         configuration.GetSection("AppSettings").Bind(appSettings);
 
-        logger.Debug($"Thread Count is set to {appSettings.threadCount}");
+        logger.Debug($"Thread Count is set to {appSettings.threadCount} and fileLoopThreadCount {appSettings.fileLoopThreadCount}");
 
         //2 Validate required settings
         if (String.IsNullOrWhiteSpace(appSettings.localNASConfig.username))
@@ -65,6 +67,11 @@ public class Services
 
         //3 Set the class level appSettings
         this.appSettings = appSettings;
+
+        parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = appSettings.fileLoopThreadCount
+        };
 
         //4 Return the appSettings in case the calling thread needs it
         return appSettings;
@@ -119,6 +126,7 @@ public class Services
         return false;
     }
 
+    //This only shows the parent file
     public async Task<List<FileItem>> GetFilesFromBackBlazeAsync(IStorageClient client,string bucketId)
     {
         var allFiles = new List<FileItem>(capacity: 12000);
@@ -152,6 +160,41 @@ public class Services
         return allFiles;
     }
 
+    //This shows the duplicated files with same name but different upload date
+    public async Task<List<FileItem>> GetFileVersionsFromBackBlazeAsync(IStorageClient client,string bucketId)
+    {
+        var allFiles = new List<FileItem>(capacity: 12000);
+        string? startFileName = null;
+        string? startFileId = null;
+
+        while (true)
+        {
+            var request = new ListFileVersionRequest(bucketId)
+            {
+                StartFileName = startFileName,
+                StartFileId = startFileId,
+                MaxFileCount = 1000,
+            };
+
+            var response = await client.Files.ListVersionsAsync(request);
+            var page = response.Response;
+
+            if (page?.Files is { Count: > 0 })
+            {
+                allFiles.AddRange(page.Files);
+            }
+
+            if (string.IsNullOrEmpty(page?.NextFileName))
+            {
+                break;
+            }
+
+            startFileName = page.NextFileName;
+            startFileId = page.NextFileId;
+        }
+
+        return allFiles;
+    }
 
     //This returns a directoryHandle meaning we still need to open a fileHandle on anything we want to read.
     public async Task<(SMB2Client?, SMBLibrary.NTStatus, ISMBFileStore fileStore, object directoryHandle)> ConnectToNASAsync(string path)
@@ -213,7 +256,7 @@ public class Services
         if (status != NTStatus.STATUS_SUCCESS || smbClient == null)
             throw new Exception("Failed to connect to NAS");
 
-        //2 Now query the NAS directory to list files
+        //2 Now query the NAS directory to list files. We do not need to delete here as that is handled as that is handled by the XenOrchestra hypervisor
         List<QueryDirectoryFileInformation> filesinNAS;
         status = fileStore.QueryDirectory(out filesinNAS, directoryHandle, "*", FileInformationClass.FileDirectoryInformation);
         logger.Info($"Files found in NAS folder:: {filesinNAS?.Count ?? 0}");
@@ -268,7 +311,8 @@ public class Services
             }
 
             logger.Debug($"\t Upload (missing in BackBlaze): {nasFile.FileName}");
-            await StartUploadAsync(nasFile, plan, bucket, backblazeClient);
+            if (!appSettings.testMode)
+                await StartUploadAsync(nasFile, plan, bucket, backblazeClient);
 
             // Optional: prevent double-upload within the same run if the NAS list contains duplicates for any reason.
             bucketNames.Add(nasFile.FileName);
@@ -286,13 +330,13 @@ public class Services
         if (status != NTStatus.STATUS_SUCCESS || smbClient == null)
             throw new Exception("Failed to connect to NAS");
 
-        //2 Now query the NAS directory to list files
+        //2 Now query the NAS directory to list files. We do not need to delete here as that is handled from the SQL agent.
         List<QueryDirectoryFileInformation> filesinNAS;
         status = fileStore.QueryDirectory(out filesinNAS, directoryHandle, "*", FileInformationClass.FileDirectoryInformation);
         logger.Info($"Files found in NAS folder:: {filesinNAS?.Count ?? 0}");
         if (status == NTStatus.STATUS_SUCCESS || status == NTStatus.STATUS_NO_MORE_FILES)
         {
-            foreach (var file in filesinNAS)
+            Parallel.ForEach(filesinNAS, parallelOptions, file =>
             {
                 if (file is FileDirectoryInformation fileInfo)  // Cast to FileDirectoryInformation to access properties
                 {
@@ -306,7 +350,7 @@ public class Services
                         }
                     }
                 }
-            }
+            });
         }
         else
         {
@@ -317,34 +361,62 @@ public class Services
         smbClient.Disconnect();
 
         //3 Get the files in the remote BackBlaze bucket
-        List<FileItem> filesInBucket = await GetFilesFromBackBlazeAsync(backblazeClient, bucket.BucketId);
+        List<FileItem> filesInBucket = await GetFileVersionsFromBackBlazeAsync(backblazeClient, bucket.BucketId);
         logger.Info($"Files found in BackBlaze bucket: {filesInBucket?.Count ?? 0}");
-        foreach (FileItem file in filesInBucket)
+        Parallel.ForEach(filesInBucket, parallelOptions, file =>
         {
             logger.Debug($"\t {file.FileName} - Size: {file.ContentLength} - Uploaded: {file.UploadTimestamp}");
-        }
+        });
 
         //4 Match on the FileName to see if it exists in BackBlaze already. Check if the upload date is different. If newer upload file.
         var bucketNames = filesInBucket.Select(f => f.FileName).ToHashSet(StringComparer.Ordinal);
         logger.Warn("Checking NAS files against BackBlaze by filename...");
-        foreach (var fileinNAS in filesinNAS)
+        Parallel.ForEach(filesinNAS, parallelOptions, async fileinNAS =>
         {
-            if (fileinNAS is not FileDirectoryInformation nasFile) continue;
-            if (nasFile.FileName is "." or "..") continue;
+            if (fileinNAS is not FileDirectoryInformation nasFile) return;
+            if (nasFile.FileName is "." or "..") return;
             if (nasFile.FileAttributes.HasFlag(SMBLibrary.FileAttributes.Directory))
-                continue;
+                return;
 
             if (bucketNames.Contains(nasFile.FileName))
             {
                 logger.Info($"\t Skip (already exists): {nasFile.FileName}");
-                continue;
+                return;
             }
 
             logger.Info($"\t Upload (missing in BackBlaze): {nasFile.FileName}");
-            await StartUploadAsync(nasFile, plan, bucket, backblazeClient);
+            if (!appSettings.testMode)
+                await StartUploadAsync(nasFile, plan, bucket, backblazeClient);
 
             // Optional: prevent double-upload within the same run if the NAS list contains duplicates for any reason.
             bucketNames.Add(nasFile.FileName);
+        });
+
+        //5 Delete files uploaded over 5 days ago only if there are 5 days worth of files uploaded so we delete everything in case backups stopped working
+        List<FileItem> filesToDelete = new List<FileItem>();
+        int filesWithinRetentionPeriod = 0;
+        Parallel.ForEach(filesInBucket, parallelOptions, async file =>
+        {
+            if (file.UploadTimestamp < DateTime.UtcNow.AddDays(-plan.DailyRetentionDays))
+            {
+                logger.Warn($"Delete old files: {file.FileName} uploaded on {file.UploadTimestamp}");
+                filesToDelete.Add(file);
+            }
+            else
+            {
+                logger.Warn($"File within retention: {file.FileName} uploaded on {file.UploadTimestamp}");
+                filesWithinRetentionPeriod++;
+            }
+        });
+
+        if (filesWithinRetentionPeriod >= (plan.DailyRetentionDays-1) * 4) //If the retention period is 5 we want that multiplied by the amount of different files, in this case TLS.bak TLS.trn WMS.bak WMS.trn
+        {
+            logger.Warn($"Files in retention {filesWithinRetentionPeriod}. Proceeding to delete old files.");
+            if (!appSettings.testMode){
+                Parallel.ForEach(filesToDelete, parallelOptions, async file => {
+                    await backblazeClient.Files.DeleteAsync(file.FileId, file.FileName);
+                });
+            }
         }
 
         return true;
@@ -359,7 +431,8 @@ public class Services
         if (status != NTStatus.STATUS_SUCCESS || smbClient == null)
             throw new Exception("Failed to connect to NAS");
 
-        //2 Now query the NAS directory to list files
+        //2 Now query the NAS directory to list files.
+        //TODO We will want to make a delete script here but it's low priority since the QB backup is only done monthly anyway,
         List<QueryDirectoryFileInformation> filesinNAS;
         status = fileStore.QueryDirectory(out filesinNAS, directoryHandle, "*", FileInformationClass.FileDirectoryInformation);
         logger.Info($"Files found in NAS folder:: {filesinNAS?.Count ?? 0}");
@@ -414,7 +487,8 @@ public class Services
             }
 
             logger.Debug($"\t Upload (missing in BackBlaze): {nasFile.FileName}");
-            await StartUploadAsync(nasFile, plan, bucket, backblazeClient);
+            if (!appSettings.testMode)
+                await StartUploadAsync(nasFile, plan, bucket, backblazeClient);
 
             // Optional: prevent double-upload within the same run if the NAS list contains duplicates for any reason.
             bucketNames.Add(nasFile.FileName);
